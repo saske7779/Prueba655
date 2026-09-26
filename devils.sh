@@ -56,11 +56,9 @@ ensure_sshx() {
     fi
 }
 
-# ─── Inicia sshx y guarda URL + PID en $SSHX_INFO ───
 start_sshx_tunnel() {
     ensure_sshx
 
-    # Matar instancias viejas
     if [ -f "$SSHX_INFO" ]; then
         OLD_PID=$(grep '^PID=' "$SSHX_INFO" | cut -d= -f2)
         [ -n "$OLD_PID" ] && kill "$OLD_PID" > /dev/null 2>&1
@@ -72,9 +70,9 @@ start_sshx_tunnel() {
     nohup sshx > "$LOG" 2>&1 &
     local PID=$!
 
-    echo -ne "${YELLOW}     ⏳ Generating SSHX link"
+    echo -ne "${YELLOW}     ⏳ Generando link SSHX (puede tardar 1 min)"
     local URL=""
-    for i in $(seq 1 40); do
+    for i in $(seq 1 60); do
         URL=$(grep -oE 'https://sshx\.io/s/[A-Za-z0-9]+' "$LOG" 2>/dev/null | head -n1)
         [ -n "$URL" ] && break
         echo -n "."
@@ -91,7 +89,6 @@ start_sshx_tunnel() {
     echo "$URL"
 }
 
-# ─── Muestra el panel con la info del link actual ───
 show_sshx_info() {
     local URL=""
     local PID=""
@@ -136,7 +133,6 @@ show_sshx_info() {
     echo ""
     echo -e "${CYAN}     Presiona ENTER para volver al menú..."
     read
-    show_menu
 }
 
 show_menu() {
@@ -169,14 +165,13 @@ show_menu() {
     echo -e "${MAGENTA}     ══════════════════════════════════════════════════${NC}"
     echo ""
 
-    # Detectar estado
     VM_STATUS="${RED}● OFFLINE${NC}"
     SSHX_STATUS="${RED}● NO LINK${NC}"
     if [ -f "/home/daytona/ubuntu22.qcow2" ] && [ -f "seed.img" ]; then
         VM_STATUS="${GREEN}● READY${NC}"
     fi
     if [ -f "$SSHX_INFO" ]; then
-        local PID=$(grep '^PID=' "$SSHX_INFO" | cut -d= -f2)
+        PID=$(grep '^PID=' "$SSHX_INFO" | cut -d= -f2)
         if [ -n "$PID" ] && kill -0 "$PID" > /dev/null 2>&1; then
             SSHX_STATUS="${GREEN}● ACTIVE${NC}"
         fi
@@ -192,30 +187,23 @@ show_menu() {
 
     echo -e "${PURPLE}     ┌─────────────────── ${WHITE}MAIN MENU${PURPLE} ─────────────────────┐${NC}"
     echo -e "${PURPLE}     │                                                  │${NC}"
-
     echo -e "${PURPLE}     │   ${CYAN}01${PURPLE}  ›  ${WHITE}CREATE VPS${PURPLE}                              │${NC}"
     echo -e "${PURPLE}     │       ${WHITE}Deploy a new Ubuntu virtual machine${PURPLE}        │${NC}"
     echo -e "${PURPLE}     │                                                  │${NC}"
-
     echo -e "${PURPLE}     │   ${CYAN}02${PURPLE}  ›  ${WHITE}RESTART VPS${PURPLE}                             │${NC}"
     echo -e "${PURPLE}     │       ${WHITE}Start existing VPS instance${PURPLE}                │${NC}"
     echo -e "${PURPLE}     │                                                  │${NC}"
-
     echo -e "${PURPLE}     │   ${CYAN}03${PURPLE}  ›  ${WHITE}NETWORK${PURPLE}                                 │${NC}"
     echo -e "${PURPLE}     │       ${WHITE}Configure TCP port forwarding${PURPLE}              │${NC}"
     echo -e "${PURPLE}     │                                                  │${NC}"
-
     echo -e "${PURPLE}     │   ${CYAN}04${PURPLE}  ›  ${WHITE}CLEANUP${PURPLE}                                 │${NC}"
     echo -e "${PURPLE}     │       ${WHITE}Remove VPS files and cache${PURPLE}                 │${NC}"
     echo -e "${PURPLE}     │                                                  │${NC}"
-
     echo -e "${PURPLE}     │   ${CYAN}05${PURPLE}  ›  ${WHITE}VIEW SSHX LINK${PURPLE}                         │${NC}"
     echo -e "${PURPLE}     │       ${WHITE}Show current SSHX tunnel URL${PURPLE}              │${NC}"
     echo -e "${PURPLE}     │                                                  │${NC}"
-
     echo -e "${PURPLE}     │   ${CYAN}06${PURPLE}  ›  ${WHITE}EXIT${PURPLE}                                    │${NC}"
     echo -e "${PURPLE}     │       ${WHITE}Close control panel${PURPLE}                        │${NC}"
-
     echo -e "${PURPLE}     │                                                  │${NC}"
     echo -e "${PURPLE}     └──────────────────────────────────────────────────┘${NC}"
     echo ""
@@ -251,7 +239,6 @@ show_menu() {
             echo ""
             echo -e "${RED}     ❌ Invalid choice! Please select 1-6.${NC}"
             sleep 2
-            show_menu
             ;;
     esac
 }
@@ -365,7 +352,6 @@ configure_tcp() {
     echo -e "${GREEN}     ✅ TCP Rule Updated Successfully!${NC}"
 
     sleep 2
-    show_menu
 }
 
 save_env() {
@@ -387,6 +373,21 @@ boot_qemu() {
     TCP_GUEST_PORT=${TCP_GUEST_PORT:-22}
     RAM_VALUE="${RAM_GB:-32}G"
 
+    # ─── Matar QEMU previo y limpiar lock ───
+    if pgrep -f "qemu-system-x86_64" > /dev/null 2>&1; then
+        echo -e "${YELLOW}     ⚠️ QEMU ya está corriendo. Deteniéndolo...${NC}"
+        pkill -9 -f "qemu-system-x86_64" > /dev/null 2>&1
+        sleep 3
+    fi
+    $SUDO_CMD rm -f /home/daytona/ubuntu22.qcow2.lock 2>/dev/null
+
+    # ─── Liberar puerto SSH ───
+    if $SUDO_CMD lsof -i :${TCP_HOST_PORT} > /dev/null 2>&1; then
+        echo -e "${YELLOW}     ⚠️ Puerto ${TCP_HOST_PORT} en uso. Liberando...${NC}"
+        $SUDO_CMD fuser -k ${TCP_HOST_PORT}/tcp > /dev/null 2>&1
+        sleep 2
+    fi
+
     clear
     echo ""
     echo -e "${MAGENTA}     ╔══════════════════════════════════════════════════╗${NC}"
@@ -394,17 +395,9 @@ boot_qemu() {
     echo -e "${MAGENTA}     ╚══════════════════════════════════════════════════╝${NC}"
     echo ""
 
-    # ─── Verificar/liberar puerto ───
-    if $SUDO_CMD lsof -i :${TCP_HOST_PORT} > /dev/null 2>&1; then
-        echo -e "${YELLOW}     ⚠️ Puerto ${TCP_HOST_PORT} en uso. Liberando...${NC}"
-        $SUDO_CMD fuser -k ${TCP_HOST_PORT}/tcp > /dev/null 2>&1
-        sleep 2
-    fi
-
     # ─── Levantar túnel SSHX ───
     SSHX_URL=$(start_sshx_tunnel)
 
-    # ─── Panel de información ───
     clear
     echo ""
     echo -e "${MAGENTA}     ╔══════════════════════════════════════════════════╗${NC}"
@@ -437,7 +430,6 @@ boot_qemu() {
     echo -e "${YELLOW}     ⏳ Arrancando QEMU en 5 segundos..."
     sleep 5
 
-    # ─── Arrancar QEMU ───
     qemu-system-x86_64 \
         -hda /home/daytona/ubuntu22.qcow2 \
         -m "$RAM_VALUE" \
@@ -447,21 +439,15 @@ boot_qemu() {
         -netdev user,id=net0,hostfwd=tcp::${TCP_HOST_PORT}-:${TCP_GUEST_PORT} \
         -device e1000,netdev=net0
 
-    # ─── Al salir de QEMU ───
     echo ""
     echo -e "${YELLOW}     ⚠️ QEMU detenido. El túnel SSHX sigue activo.${NC}"
     echo -e "${CYAN}     Link actual guardado en '${SSHX_INFO}'${NC}"
     echo ""
-    echo -ne "${CYAN}     Volver al menú? [Y/n]: ${NC}"
-    read BACK
-    if [[ "$BACK" =~ ^[Nn]$ ]]; then
-        exit 0
-    fi
-    show_menu
+    echo -e "${CYAN}     Presiona ENTER para volver al menú..."
+    read
 }
 
 restart_vps() {
-
     clear
 
     if [ -f "/home/daytona/ubuntu22.qcow2" ] && [ -f "seed.img" ]; then
@@ -478,12 +464,10 @@ restart_vps() {
         echo -e "${MAGENTA}     ║ ${WHITE}Build the VPS using Option 1.${MAGENTA}                    ║${NC}"
         echo -e "${MAGENTA}     ╚══════════════════════════════════════════════════╝${NC}"
         sleep 3
-        show_menu
     fi
 }
 
 clean_vps() {
-
     clear
 
     echo ""
@@ -494,13 +478,15 @@ clean_vps() {
 
     echo -e "${YELLOW}     ⚠️ Purging VPS storage components and configurations...${NC}"
 
+    pkill -9 -f "qemu-system-x86_64" > /dev/null 2>&1
+
     $SUDO_CMD rm -rf \
         user-data \
         seed.img \
         /home/daytona/ubuntu22.qcow2 \
+        /home/daytona/ubuntu22.qcow2.lock \
         .vps_env
 
-    # Matar sshx y limpiar info
     if [ -f "$SSHX_INFO" ]; then
         PID=$(grep '^PID=' "$SSHX_INFO" | cut -d= -f2)
         [ -n "$PID" ] && kill "$PID" > /dev/null 2>&1
@@ -513,7 +499,9 @@ clean_vps() {
     echo -e "${GREEN}     ✅ DEVILS WILL RISE workspace successfully cleaned!${NC}"
 
     sleep 2
-    show_menu
 }
 
-show_menu
+# ─── Bucle principal (sin recursión) ───
+while true; do
+    show_menu
+done
